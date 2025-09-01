@@ -30,11 +30,12 @@ jobs:
           pyinstaller --onefile --windowed \
             --target-arch universal2 \
             --name "CSV Downloader" csv_downloader.py
+          chmod +x "dist/CSV Downloader.app/Contents/MacOS/CSV Downloader"
 
-      - name: Zip macOS app
+      - name: Zip macOS app correctly
         run: |
           cd dist
-          zip -r "CSV-Downloader-macOS.zip" "CSV Downloader.app"
+          ditto -c -k --sequesterRsrc --keepParent "CSV Downloader.app" "CSV-Downloader-macOS.zip"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
