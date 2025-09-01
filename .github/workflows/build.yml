@@ -57,22 +57,18 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install -r requirements.txt
           pip install pyinstaller
-          if (Test-Path requirements.txt) { pip install -r requirements.txt }
 
       - name: Build Windows exe
         run: |
           pyinstaller --onefile --windowed --name "CSV Downloader" csv_downloader.py
 
-      - name: Zip Windows exe
-        run: |
-          powershell Compress-Archive -Path "dist/CSV Downloader.exe" -DestinationPath "dist/CSV-Downloader-Windows.zip"
-
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: CSV-Downloader-Windows
-          path: dist/CSV-Downloader-Windows.zip
+          path: dist/CSV Downloader.exe
 
   build-linux:
     runs-on: ubuntu-latest
