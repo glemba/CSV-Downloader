@@ -21,7 +21,6 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Ensure latest PyInstaller (>=6.0) for --target-arch support
           pip install "pyinstaller>=6.0"
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
@@ -31,6 +30,27 @@ jobs:
             --target-arch universal2 \
             --name "CSV Downloader" csv_downloader.py
           chmod +x "dist/CSV Downloader.app/Contents/MacOS/CSV Downloader"
+
+      - name: Verify macOS binary
+        run: |
+          echo "Checking executable bit..."
+          ls -l "dist/CSV Downloader.app/Contents/MacOS/CSV Downloader"
+
+          echo "Checking architectures..."
+          ARCHS=$(lipo -info "dist/CSV Downloader.app/Contents/MacOS/CSV Downloader")
+          echo $ARCHS
+
+          if [[ "$ARCHS" != *"x86_64"* ]] || [[ "$ARCHS" != *"arm64"* ]]; then
+            echo "❌ Binary is not universal2 (x86_64 + arm64)"
+            exit 1
+          fi
+
+          if [[ ! -x "dist/CSV Downloader.app/Contents/MacOS/CSV Downloader" ]]; then
+            echo "❌ Binary is not marked executable"
+            exit 1
+          fi
+
+          echo "✅ Binary looks good (executable + universal2)."
 
       - name: Zip macOS app correctly
         run: |
@@ -42,6 +62,7 @@ jobs:
         with:
           name: CSV-Downloader-macOS
           path: dist/CSV-Downloader-macOS.zip
+
 
   build-windows:
     runs-on: windows-latest
