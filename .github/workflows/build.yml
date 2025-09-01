@@ -21,20 +21,26 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # Ensure latest PyInstaller (>=6.0) for --target-arch support
           pip install "pyinstaller>=6.0"
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Build macOS universal app
         run: |
-        # Force universal build (x86_64 + arm64)
-          pyinstaller --onefile --windowed --target-arch universal2 --name "CSV Downloader" csv_downloader.py
+          pyinstaller --onefile --windowed \
+            --target-arch universal2 \
+            --name "CSV Downloader" csv_downloader.py
 
+      - name: Zip macOS app
+        run: |
+          cd dist
+          zip -r "CSV-Downloader-macOS.zip" "CSV Downloader.app"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: CSV-Downloader-macOS
-          path: dist/CSV\ Downloader
+          path: dist/CSV-Downloader-macOS.zip
 
   build-windows:
     runs-on: windows-latest
@@ -51,18 +57,22 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
           pip install pyinstaller
+          if exist requirements.txt pip install -r requirements.txt
 
       - name: Build Windows exe
         run: |
           pyinstaller --onefile --windowed --name "CSV Downloader" csv_downloader.py
 
+      - name: Zip Windows exe
+        run: |
+          powershell Compress-Archive -Path "dist/CSV Downloader.exe" -DestinationPath "dist/CSV-Downloader-Windows.zip"
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: CSV-Downloader-Windows
-          path: dist/CSV Downloader.exe
+          path: dist/CSV-Downloader-Windows.zip
 
   build-linux:
     runs-on: ubuntu-latest
@@ -79,15 +89,20 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
           pip install pyinstaller
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Build Linux binary
         run: |
           pyinstaller --onefile --windowed --name "CSV Downloader" csv_downloader.py
 
+      - name: Zip Linux binary
+        run: |
+          cd dist
+          zip -r "CSV-Downloader-Linux.zip" "CSV Downloader"
+
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: CSV-Downloader-Linux
-          path: dist/CSV\ Downloader
+          path: dist/CSV-Downloader-Linux.zip
