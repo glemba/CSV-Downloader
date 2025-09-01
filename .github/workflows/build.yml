@@ -22,11 +22,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install "pyinstaller>=6.0"
 
-      - name: Build macOS app
+      - name: Build macOS universal app
         run: |
-          pyinstaller --onefile --windowed --name "CSV Downloader" csv_downloader.py
+        # Force universal build (x86_64 + arm64)
+          pyinstaller --onefile --windowed --target-arch universal2 --name "CSV Downloader" csv_downloader.py
+
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
