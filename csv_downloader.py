@@ -1,5 +1,6 @@
 import csv
 import os
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import requests
@@ -39,8 +40,17 @@ def read_urls_from_csv(csv_file):
     return urls
 
 def download_files(urls, output_dir):
-    """Stáhne všechny soubory s progress barem."""
-    for url in tqdm(urls, desc="Stahování souborů", unit="soubor"):
+    """Stáhne všechny soubory s (bezpečným) progress barem."""
+    try:
+        # na Windows (--windowed) může být sys.stdout = None, proto kontrola
+        file_stream = sys.stdout if sys.stdout else sys.__stdout__
+        progress_bar = tqdm(urls, desc="Stahování souborů", unit="soubor", file=file_stream)
+    except Exception:
+        # fallback – žádný progress bar
+        def tqdm(x, **kwargs): return x
+        progress_bar = tqdm(urls)
+
+    for url in progress_bar:
         try:
             response = requests.get(url, stream=True, timeout=15)
             response.raise_for_status()
