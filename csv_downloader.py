@@ -1,8 +1,8 @@
 import csv
 import os
 import re
-import sys
 import time
+import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from urllib.parse import urlparse, unquote
@@ -45,6 +45,7 @@ def unique_path(folder: str, filename: str) -> str:
 def filename_from_content_disposition(cd: str) -> str | None:
     if not cd:
         return None
+    import urllib.parse
     m = re.search(r'filename\*\s*=\s*[^\'"]*\'\'([^;]+)', cd, flags=re.IGNORECASE)
     if m:
         try:
@@ -103,7 +104,7 @@ class App:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("CSV Downloader")
-        self.root.geometry("500x250")
+        self.root.geometry("500x300")
         self.root.resizable(False, False)
 
         tk.Label(self.root, text="Vyber CSV a cílovou složku, poté začne stahování.").pack(padx=16, pady=(16,8))
@@ -136,7 +137,7 @@ class App:
         self.timeout_entry.insert(0, "30")
         self.timeout_entry.grid(row=2, column=1, sticky="w")
 
-        tk.Label(frame_opts, text="Requests per second (rate limit, 0 = max):").grid(row=3, column=0, sticky="w")
+        tk.Label(frame_opts, text="Requests per second (0 = max):").grid(row=3, column=0, sticky="w")
         self.rate_entry = tk.Entry(frame_opts, width=5)
         self.rate_entry.insert(0, "0")
         self.rate_entry.grid(row=3, column=1, sticky="w")
@@ -145,7 +146,6 @@ class App:
         self.urls: list[str] = []
         self.out_dir = ""
         self.total = 0
-        self.index = 0
         self.ok_count = 0
         self.errors: list[str] = []
 
@@ -155,7 +155,6 @@ class App:
             messagebox.showinfo("Zrušeno", "Nebyl vybrán CSV soubor nebo cílová složka.")
             return
 
-        # načtení parametrů
         self.out_dir = out_dir
         self.urls = extract_urls_from_csv(csv_path)
         if not self.urls:
@@ -171,17 +170,13 @@ class App:
             return
 
         proxy_val = self.proxy_entry.get().strip()
-        if proxy_val:
-            self.proxies = {"http": proxy_val, "https": proxy_val}
-        else:
-            self.proxies = None
+        self.proxies = {"http": proxy_val, "https": proxy_val} if proxy_val else None
 
         self.total = len(self.urls)
         self.progress["maximum"] = self.total
         self.progress["value"] = 0
         self.status.config(text=f"Nalezeno URL: {self.total}. Začínám stahovat…")
         self.start_btn.config(state="disabled")
-        self.index = 0
         self.ok_count = 0
         self.errors = []
 
@@ -191,46 +186,35 @@ class App:
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
-        self.root.after(50, self.download_next)
+        threading.Thread(target=self.download_all, daemon=True).start()
 
-    def download_next(self):
-        if self.index >= self.total:
-            self.finish()
-            return
-
-        url = self.urls[self.index]
-        self.status.config(text=f"Stahuji {self.index+1}/{self.total}: {url}")
-        self.root.update_idletasks()
-
-        try:
-            with self.session.get(url, stream=True, timeout=self.timeout, proxies=self.proxies) as r:
-                r.raise_for_status()
-                filename = derive_filename(url, r)
-                save_path = unique_path(self.out_dir, filename)
-
-                bytes_written = 0
-                with open(save_path, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1024*64):
-                        if chunk:
-                            f.write(chunk)
-                            bytes_written += len(chunk)
-
-                if bytes_written == 0:
-                    try: os.remove(save_path)
-                    except Exception: pass
-                    raise IOError("Stažen nulový obsah (0 B)")
+    def download_all(self):
+        for idx, url in enumerate(self.urls, 1):
+            try:
+                with self.session.get(url, stream=True, timeout=self.timeout, proxies=self.proxies) as r:
+                    r.raise_for_status()
+                    filename = derive_filename(url, r)
+                    save_path = unique_path(self.out_dir, filename)
+                    with open(save_path, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1024*64):
+                            if chunk:
+                                f.write(chunk)
                 self.ok_count += 1
+            except Exception as e:
+                self.errors.append(f"{url} → {e}")
 
-        except Exception as e:
-            self.errors.append(f"{url} → {e}")
+            # Aktualizace progress bar a status
+            self.root.after(0, lambda idx=idx, url=url: self.update_progress(idx, url))
 
-        self.index += 1
-        self.progress["value"] = self.index
+            if self.rate_limit > 0:
+                time.sleep(1/self.rate_limit)
 
-        if self.rate_limit > 0:
-            time.sleep(1/self.rate_limit)
+        self.root.after(0, self.finish)
 
-        self.root.after(10, self.download_next)
+    def update_progress(self, idx, url):
+        self.progress["value"] = idx
+        self.status.config(text=f"Stahuji {idx}/{self.total}: {url}")
+        self.root.update_idletasks()
 
     def finish(self):
         self.start_btn.config(state="normal")
