@@ -87,7 +87,7 @@ jobs:
 
       - name: Zip Windows exe
         run: |
-          powershell -Command "Compress-Archive -Path 'dist/CSV Downloader.exe' -DestinationPath 'dist/CSV-Downloader-Windows.zip'"
+          powershell -Command "if (Test-Path 'dist/CSV-Downloader-Windows.zip') { Remove-Item 'dist/CSV-Downloader-Windows.zip' -Force }; Compress-Archive -Path 'dist/CSV Downloader.exe' -DestinationPath 'dist/CSV-Downloader-Windows.zip' -Force"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
