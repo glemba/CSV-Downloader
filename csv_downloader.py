@@ -2,14 +2,15 @@ import csv
 import os
 import re
 import sys
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-import requests
 from urllib.parse import urlparse, unquote
+import requests
+from requests.adapters import HTTPAdapter, Retry
 
 URL_REGEX = re.compile(r'https?://[^\s,"\'<>]+', re.IGNORECASE)
 
-# Windows rezervované názvy
 WIN_RESERVED = {
     "CON","PRN","AUX","NUL",
     "COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9",
@@ -17,27 +18,19 @@ WIN_RESERVED = {
 }
 
 def sanitize_filename(name: str) -> str:
-    """Očistí název souboru pro Windows/macOS."""
-    # odstraníme nebezpečné znaky pro Windows
     name = re.sub(r'[<>:"/\\|?*]', '_', name)
-    # odstranit neviditelné/řídící znaky
     name = "".join(ch for ch in name if 31 < ord(ch) != 127)
-    # oříznout mezery/tečky na konci (Windows)
     name = name.rstrip(" .")
-    # prázdné -> default
     if not name:
         name = "soubor"
     base = os.path.splitext(name)[0]
     ext = os.path.splitext(name)[1]
-    # kontrola rezervovaných názvů
     if base.upper() in WIN_RESERVED:
         base = f"_{base}"
-    # rozumná délka
     safe = (base[:150] + ext) if len(base) > 150 else base + ext
     return safe
 
 def unique_path(folder: str, filename: str) -> str:
-    """Vrátí unikátní cestu (přidává ' (1)', ' (2)' před příponu)."""
     path = os.path.join(folder, filename)
     if not os.path.exists(path):
         return path
@@ -50,17 +43,14 @@ def unique_path(folder: str, filename: str) -> str:
         i += 1
 
 def filename_from_content_disposition(cd: str) -> str | None:
-    """Zkusí vytáhnout filename z Content-Disposition."""
     if not cd:
         return None
-    # filename* (RFC 5987): filename*=UTF-8''name.ext
     m = re.search(r'filename\*\s*=\s*[^\'"]*\'\'([^;]+)', cd, flags=re.IGNORECASE)
     if m:
         try:
             return unquote(m.group(1))
         except Exception:
             pass
-    # filename="name.ext" nebo filename=name.ext
     m = re.search(r'filename\s*=\s*"([^"]+)"', cd, flags=re.IGNORECASE)
     if m:
         return m.group(1)
@@ -83,7 +73,6 @@ def pick_csv_and_folder(root) -> tuple[str | None, str | None]:
     return csv_path, out_dir
 
 def extract_urls_from_csv(csv_path: str) -> list[str]:
-    """Najde všechny http(s) URL ve všech sloupcích CSV (odstraní uvozovky/mezery)."""
     urls: list[str] = []
     seen = set()
     with open(csv_path, newline="", encoding="utf-8") as f:
@@ -92,7 +81,6 @@ def extract_urls_from_csv(csv_path: str) -> list[str]:
             for cell in row:
                 if not cell:
                     continue
-                # najít všechny URL v buňce
                 for url in URL_REGEX.findall(cell):
                     url = url.strip().strip('"').strip("'")
                     if url and url.lower().startswith(("http://","https://")):
@@ -102,7 +90,6 @@ def extract_urls_from_csv(csv_path: str) -> list[str]:
     return urls
 
 def derive_filename(url: str, response: requests.Response) -> str:
-    """Určí název souboru z hlaviček nebo z URL cesty."""
     cd = response.headers.get("Content-Disposition")
     name = filename_from_content_disposition(cd)
     if not name:
@@ -110,32 +97,51 @@ def derive_filename(url: str, response: requests.Response) -> str:
         name = os.path.basename(parsed.path)
         if not name:
             name = "soubor"
-    # dekódovat %20 apod.
-    name = unquote(name)
-    return sanitize_filename(name)
+    return sanitize_filename(unquote(name))
 
 class App:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("CSV Downloader")
-        self.root.geometry("420x140")
+        self.root.geometry("500x250")
         self.root.resizable(False, False)
 
-        # UI (základní okno jen s tlačítkem start)
-        self.label = tk.Label(self.root, text="Vyber CSV a cílovou složku, poté začne stahování.")
-        self.label.pack(padx=16, pady=(16, 8))
+        tk.Label(self.root, text="Vyber CSV a cílovou složku, poté začne stahování.").pack(padx=16, pady=(16,8))
 
         self.start_btn = ttk.Button(self.root, text="Vybrat soubory a spustit", command=self.start)
         self.start_btn.pack(pady=8)
 
-        self.progress = ttk.Progressbar(self.root, length=360, mode="determinate")
+        self.progress = ttk.Progressbar(self.root, length=460, mode="determinate")
         self.progress.pack(padx=16, pady=(8, 4))
         self.progress["value"] = 0
 
         self.status = tk.Label(self.root, text="Připraveno", anchor="w")
-        self.status.pack(fill="x", padx=16, pady=(0, 8))
+        self.status.pack(fill="x", padx=16, pady=(0,4))
 
-        # stav
+        # Proxy a nastavení retry/timeout/rate
+        frame_opts = tk.Frame(self.root)
+        frame_opts.pack(pady=4, padx=16, fill="x")
+
+        tk.Label(frame_opts, text="Proxy (http://host:port) nepovinné:").grid(row=0, column=0, sticky="w")
+        self.proxy_entry = tk.Entry(frame_opts, width=40)
+        self.proxy_entry.grid(row=0, column=1, sticky="w")
+
+        tk.Label(frame_opts, text="Retry:").grid(row=1, column=0, sticky="w")
+        self.retry_entry = tk.Entry(frame_opts, width=5)
+        self.retry_entry.insert(0, "5")
+        self.retry_entry.grid(row=1, column=1, sticky="w")
+
+        tk.Label(frame_opts, text="Timeout (s):").grid(row=2, column=0, sticky="w")
+        self.timeout_entry = tk.Entry(frame_opts, width=5)
+        self.timeout_entry.insert(0, "30")
+        self.timeout_entry.grid(row=2, column=1, sticky="w")
+
+        tk.Label(frame_opts, text="Requests per second (rate limit, 0 = max):").grid(row=3, column=0, sticky="w")
+        self.rate_entry = tk.Entry(frame_opts, width=5)
+        self.rate_entry.insert(0, "0")
+        self.rate_entry.grid(row=3, column=1, sticky="w")
+
+        # Stav
         self.urls: list[str] = []
         self.out_dir = ""
         self.total = 0
@@ -148,24 +154,47 @@ class App:
         if not csv_path or not out_dir:
             messagebox.showinfo("Zrušeno", "Nebyl vybrán CSV soubor nebo cílová složka.")
             return
+
+        # načtení parametrů
         self.out_dir = out_dir
         self.urls = extract_urls_from_csv(csv_path)
         if not self.urls:
             messagebox.showerror("Chyba", "V CSV se nenašly žádné URL (http/https).")
             return
 
+        try:
+            self.retry = int(self.retry_entry.get())
+            self.timeout = int(self.timeout_entry.get())
+            self.rate_limit = float(self.rate_entry.get())
+        except Exception:
+            messagebox.showerror("Chyba", "Nastavení retry/timeout/rate musí být číslo.")
+            return
+
+        proxy_val = self.proxy_entry.get().strip()
+        if proxy_val:
+            self.proxies = {"http": proxy_val, "https": proxy_val}
+        else:
+            self.proxies = None
+
         self.total = len(self.urls)
         self.progress["maximum"] = self.total
         self.progress["value"] = 0
         self.status.config(text=f"Nalezeno URL: {self.total}. Začínám stahovat…")
         self.start_btn.config(state="disabled")
+        self.index = 0
+        self.ok_count = 0
+        self.errors = []
 
-        # spustit stahování po malém delay (aby se UI stihlo překreslit)
+        self.session = requests.Session()
+        retries = Retry(total=self.retry, backoff_factor=0.5, status_forcelist=[500,502,503,504])
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
         self.root.after(50, self.download_next)
 
     def download_next(self):
         if self.index >= self.total:
-            # hotovo
             self.finish()
             return
 
@@ -174,48 +203,43 @@ class App:
         self.root.update_idletasks()
 
         try:
-            with requests.get(url, stream=True, timeout=30) as r:
+            with self.session.get(url, stream=True, timeout=self.timeout, proxies=self.proxies) as r:
                 r.raise_for_status()
                 filename = derive_filename(url, r)
                 save_path = unique_path(self.out_dir, filename)
 
                 bytes_written = 0
                 with open(save_path, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1024 * 64):
+                    for chunk in r.iter_content(chunk_size=1024*64):
                         if chunk:
                             f.write(chunk)
                             bytes_written += len(chunk)
 
                 if bytes_written == 0:
-                    # smazat prázdný soubor a zapsat chybu
-                    try:
-                        os.remove(save_path)
-                    except Exception:
-                        pass
+                    try: os.remove(save_path)
+                    except Exception: pass
                     raise IOError("Stažen nulový obsah (0 B)")
                 self.ok_count += 1
 
         except Exception as e:
             self.errors.append(f"{url} → {e}")
 
-        # posunout progress
         self.index += 1
         self.progress["value"] = self.index
 
-        # další soubor
+        if self.rate_limit > 0:
+            time.sleep(1/self.rate_limit)
+
         self.root.after(10, self.download_next)
 
     def finish(self):
-        # reaktivovat tlačítko
         self.start_btn.config(state="normal")
-        # souhrn
         failed = len(self.errors)
         ok = self.ok_count
         total = self.total
-        if failed == 0 and ok == total and total > 0:
+        if failed == 0 and ok == total and total>0:
             messagebox.showinfo("Hotovo", f"Úspěšně staženo {ok}/{total} souborů.")
         else:
-            # ukaž první chyby (aby měl uživatel vodítko)
             err_preview = "\n".join(self.errors[:10]) if failed else "—"
             messagebox.showwarning(
                 "Dokončeno s chybami",
@@ -224,7 +248,6 @@ class App:
         self.status.config(text="Hotovo")
 
 def main():
-    # Na Windows s PyInstaller --windowed nebývá konzole → vše děláme přes GUI/messagebox
     app = App()
     app.root.mainloop()
 
